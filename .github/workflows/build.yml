@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ==========================================
-      # JAVA
+      # JAVA 17
       # ==========================================
 
       - name: Setup Java 17
@@ -51,7 +51,12 @@ jobs:
 
       - name: Check Java
         run: |
-          echo "Java:"
+          set -e
+
+          echo "======================================"
+          echo "JAVA"
+          echo "======================================"
+
           java -version
 
           echo ""
@@ -70,15 +75,20 @@ jobs:
 
       - name: Check Flutter
         run: |
-          echo "Flutter:"
+          set -e
+
+          echo "======================================"
+          echo "FLUTTER"
+          echo "======================================"
+
           flutter --version
 
           echo ""
-          echo "Dart:"
+          echo "DART:"
           dart --version
 
           echo ""
-          echo "Java:"
+          echo "JAVA:"
           java -version
 
       # ==========================================
@@ -87,6 +97,12 @@ jobs:
 
       - name: Prepare directories
         run: |
+          set -e
+
+          echo "======================================"
+          echo "PREPARE DIRECTORIES"
+          echo "======================================"
+
           rm -rf project
           rm -rf output
           rm -f project.zip
@@ -94,8 +110,10 @@ jobs:
           mkdir -p project
           mkdir -p output
 
+          echo "Directories ready."
+
       # ==========================================
-      # DOWNLOAD PROJECT
+      # DOWNLOAD ZIP
       # ==========================================
 
       - name: Download Flutter project
@@ -106,7 +124,7 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "Downloading Flutter project"
+          echo "DOWNLOAD FLUTTER PROJECT"
           echo "======================================"
 
           if [ -z "$ZIP_URL" ]; then
@@ -116,12 +134,18 @@ jobs:
 
           if [ -z "$GH_TOKEN" ]; then
             echo "ERROR: BUILD_TOKEN belum dikonfigurasi."
-            echo "Buat repository secret bernama BUILD_TOKEN."
+            echo ""
+            echo "Buat:"
+            echo "Settings"
+            echo "-> Secrets and variables"
+            echo "-> Actions"
+            echo "-> New repository secret"
+            echo ""
+            echo "Name: BUILD_TOKEN"
             exit 1
           fi
 
-          echo "URL:"
-          echo "$ZIP_URL"
+          echo "Downloading project..."
 
           curl -fL \
             --retry 5 \
@@ -135,7 +159,7 @@ jobs:
             -o project.zip
 
           echo ""
-          echo "Downloaded file:"
+          echo "Downloaded:"
           ls -lh project.zip
 
           echo ""
@@ -147,15 +171,13 @@ jobs:
 
           if ! unzip -t project.zip >/dev/null 2>&1; then
             echo "ERROR: File yang didownload bukan ZIP valid."
-
             echo ""
-            echo "First bytes:"
+            echo "Response:"
             head -c 500 project.zip || true
-
             exit 1
           fi
 
-          echo "ZIP valid."
+          echo "ZIP VALID."
 
       # ==========================================
       # EXTRACT
@@ -165,13 +187,56 @@ jobs:
         run: |
           set -e
 
-          echo "Extracting project..."
+          echo "======================================"
+          echo "EXTRACT PROJECT"
+          echo "======================================"
 
           unzip -q project.zip -d project
 
           echo ""
           echo "Extracted files:"
-          find project -maxdepth 4 -type f | head -100
+          find project -maxdepth 4 -type f | head -200
+
+      # ==========================================
+      # FIX GRADLE PERMISSION
+      # ==========================================
+
+      - name: Fix Gradle Permissions
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "FIX GRADLE PERMISSIONS"
+          echo "======================================"
+
+          GRADLEW_FILES=$(find project \
+            -type f \
+            -path "*/android/gradlew")
+
+          if [ -z "$GRADLEW_FILES" ]; then
+            echo "WARNING: android/gradlew tidak ditemukan."
+            echo "Flutter project mungkin menggunakan struktur berbeda."
+          else
+            echo "gradlew ditemukan:"
+
+            echo "$GRADLEW_FILES"
+
+            while IFS= read -r GRADLEW; do
+              if [ -n "$GRADLEW" ]; then
+                echo ""
+                echo "Fixing:"
+                echo "$GRADLEW"
+
+                chmod +x "$GRADLEW"
+
+                echo "Permission:"
+                ls -lh "$GRADLEW"
+              fi
+            done <<< "$GRADLEW_FILES"
+          fi
+
+          echo ""
+          echo "Gradle permission fix selesai."
 
       # ==========================================
       # FIND FLUTTER PROJECT
@@ -181,7 +246,9 @@ jobs:
         run: |
           set -e
 
-          echo "Searching pubspec.yaml..."
+          echo "======================================"
+          echo "FIND FLUTTER PROJECT"
+          echo "======================================"
 
           PUBSPEC=$(find project \
             -type f \
@@ -193,7 +260,7 @@ jobs:
 
             echo ""
             echo "Project contents:"
-            find project -maxdepth 4 -type f | head -200
+            find project -maxdepth 5 -type f | head -300
 
             exit 1
           fi
@@ -209,10 +276,60 @@ jobs:
           ls -lah "$PROJECT_DIR"
 
           echo ""
+          echo "Saving PROJECT_DIR..."
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # FLUTTER PUB GET
+      # CHECK GRADLE WRAPPER
+      # ==========================================
+
+      - name: Check Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "CHECK GRADLE WRAPPER"
+          echo "======================================"
+
+          if [ -f "android/gradlew" ]; then
+
+            echo "gradlew ditemukan."
+
+            chmod +x android/gradlew
+
+            echo ""
+            echo "Permission:"
+            ls -lh android/gradlew
+
+            echo ""
+            echo "Testing wrapper:"
+            ./android/gradlew --version
+
+          else
+
+            echo "WARNING: android/gradlew tidak ditemukan."
+
+          fi
+
+      # ==========================================
+      # FLUTTER CLEAN
+      # ==========================================
+
+      - name: Flutter Clean
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "FLUTTER CLEAN"
+          echo "======================================"
+
+          flutter clean || true
+
+      # ==========================================
+      # PUB GET
       # ==========================================
 
       - name: Flutter Pub Get
@@ -221,14 +338,7 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "Flutter Clean"
-          echo "======================================"
-
-          flutter clean || true
-
-          echo ""
-          echo "======================================"
-          echo "Flutter Pub Get"
+          echo "FLUTTER PUB GET"
           echo "======================================"
 
           flutter pub get
@@ -244,7 +354,7 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "Building RELEASE APK"
+          echo "BUILD RELEASE APK"
           echo "======================================"
 
           flutter build apk --release
@@ -260,7 +370,7 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "Building DEBUG APK"
+          echo "BUILD DEBUG APK"
           echo "======================================"
 
           flutter build apk --debug
@@ -275,27 +385,35 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "Searching APK"
+          echo "COLLECT APK"
           echo "======================================"
 
-          APK_COUNT=$(find build/app/outputs/flutter-apk \
+          echo "Searching APK..."
+
+          find build \
+            -type f \
+            -name "*.apk" \
+            -print || true
+
+          APK_COUNT=$(find build \
             -type f \
             -name "*.apk" \
             | wc -l)
 
-          echo "APK ditemukan: $APK_COUNT"
+          echo ""
+          echo "APK count: $APK_COUNT"
 
           if [ "$APK_COUNT" -eq 0 ]; then
             echo "ERROR: APK tidak ditemukan."
 
             echo ""
             echo "Build directory:"
-            find build -maxdepth 6 -type f 2>/dev/null | head -200 || true
+            find build -maxdepth 8 -type f 2>/dev/null | head -300 || true
 
             exit 1
           fi
 
-          find build/app/outputs/flutter-apk \
+          find build \
             -type f \
             -name "*.apk" \
             -exec cp {} "$GITHUB_WORKSPACE/output/" \;
@@ -313,6 +431,10 @@ jobs:
           BUILD_TAG: ${{ inputs.tag }}
         run: |
           set -e
+
+          echo "======================================"
+          echo "RENAME APK"
+          echo "======================================"
 
           APK=$(find output \
             -type f \
@@ -344,6 +466,10 @@ jobs:
       - name: Verify APK
         run: |
           set -e
+
+          echo "======================================"
+          echo "VERIFY APK"
+          echo "======================================"
 
           APK=$(find output \
             -type f \
@@ -387,10 +513,11 @@ jobs:
           retention-days: 3
 
       # ==========================================
-      # SUMMARY
+      # BUILD SUMMARY
       # ==========================================
 
       - name: Build Summary
+        if: success()
         env:
           BUILD_TAG: ${{ inputs.tag }}
           BUILD_TYPE: ${{ inputs.build_type }}
