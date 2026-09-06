@@ -1,0 +1,148 @@
+name: Web2APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: "URL website"
+        required: true
+        type: string
+      app_name:
+        description: "Nama aplikasi"
+        required: true
+        type: string
+      icon_url:
+        description: "URL icon"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "stable"
+          channel: stable
+          cache: true
+
+      - name: Create Flutter Project
+        run: |
+          flutter create web2apk
+          cd web2apk
+
+          sed -i 's/^name: .*/name: web2apk/' pubspec.yaml
+
+      - name: Add WebView Dependency
+        working-directory: web2apk
+        run: |
+          flutter pub add webview_flutter
+
+      - name: Create Application
+        working-directory: web2apk
+        run: |
+          cat > lib/main.dart <<'DART'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const WebToApkApp());
+          }
+
+          class WebToApkApp extends StatelessWidget {
+            const WebToApkApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: '${{ inputs.app_name }}',
+                theme: ThemeData(
+                  useMaterial3: true,
+                ),
+                home: const WebViewPage(),
+              );
+            }
+          }
+
+          class WebViewPage extends StatefulWidget {
+            const WebViewPage({super.key});
+
+            @override
+            State<WebViewPage> createState() => _WebViewPageState();
+          }
+
+          class _WebViewPageState extends State<WebViewPage> {
+            late final WebViewController controller;
+
+            @override
+            void initState() {
+              super.initState();
+
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..loadRequest(
+                  Uri.parse('${{ inputs.web_url }}'),
+                );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                body: SafeArea(
+                  child: WebViewWidget(
+                    controller: controller,
+                  ),
+                ),
+              );
+            }
+          }
+          DART
+
+      - name: Enable Internet Permission
+        run: |
+          MANIFEST="web2apk/android/app/src/main/AndroidManifest.xml"
+
+          sed -i \
+            's#<manifest #<manifest android:usesCleartextTraffic="true" #' \
+            "$MANIFEST"
+
+          sed -i \
+            's#<manifest #<manifest xmlns:android="http://schemas.android.com/apk/res/android" #' \
+            "$MANIFEST"
+
+          sed -i \
+            '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' \
+            "$MANIFEST"
+
+      - name: Build APK
+        working-directory: web2apk
+        run: flutter build apk --release
+
+      - name: Collect APK
+        run: |
+          mkdir -p output
+          cp web2apk/build/app/outputs/flutter-apk/app-release.apk \
+             output/${{ inputs.app_name }}.apk
+
+          ls -lah output
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web2apk-${{ github.run_id }}
+          path: output/*.apk
+          if-no-files-found: error
+          retention-days: 1
