@@ -1,148 +1,293 @@
-name: Web2APK Build
+name: Web2APK
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: "URL website"
+        description: "Website URL"
         required: true
         type: string
+
       app_name:
-        description: "Nama aplikasi"
+        description: "Application name"
         required: true
         type: string
+
       icon_url:
-        description: "URL icon"
-        required: true
+        description: "Application icon URL"
+        required: false
         type: string
 
 jobs:
   build:
+    name: Build Web2APK
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
-      - name: Checkout
+      # ==============================
+      # CHECKOUT
+      # ==============================
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      # ==============================
+      # JAVA 17
+      # ==============================
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
+      # ==============================
+      # FLUTTER
+      # ==============================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "stable"
+          flutter-version: "3.35.7"
           channel: stable
           cache: true
 
-      - name: Create Flutter Project
+      # ==============================
+      # CHECK ENVIRONMENT
+      # ==============================
+      - name: Check Flutter
         run: |
-          flutter create web2apk
-          cd web2apk
+          flutter --version
+          dart --version
+          java -version
 
-          sed -i 's/^name: .*/name: web2apk/' pubspec.yaml
+      # ==============================
+      # CREATE FLUTTER APP
+      # ==============================
+      - name: Create Flutter project
+        run: |
+          rm -rf web2apk
+          flutter create --platforms=android web2apk
 
-      - name: Add WebView Dependency
+      # ==============================
+      # WEBVIEW PACKAGE
+      # ==============================
+      - name: Install WebView
         working-directory: web2apk
         run: |
           flutter pub add webview_flutter
 
-      - name: Create Application
-        working-directory: web2apk
+      # ==============================
+      # DOWNLOAD ICON
+      # ==============================
+      - name: Download application icon
+        env:
+          ICON_URL: ${{ inputs.icon_url }}
         run: |
-          cat > lib/main.dart <<'DART'
+          mkdir -p web2apk/android/app/src/main/res/drawable
+
+          if [ -n "$ICON_URL" ]; then
+            echo "Downloading icon..."
+
+            curl -fL \
+              --retry 5 \
+              --retry-delay 3 \
+              --connect-timeout 30 \
+              --max-time 120 \
+              "$ICON_URL" \
+              -o web2apk/android/app/src/main/res/drawable/app_icon.png
+
+            file web2apk/android/app/src/main/res/drawable/app_icon.png
+          else
+            echo "No icon URL supplied."
+          fi
+
+      # ==============================
+      # CREATE MAIN DART
+      # ==============================
+      - name: Configure WebView
+        env:
+          WEB_URL: ${{ inputs.web_url }}
+        run: |
+          python3 - <<'PY'
+          import os
+
+          url = os.environ["WEB_URL"]
+
+          escaped_url = (
+              url
+              .replace("\\", "\\\\")
+              .replace("'", "\\'")
+          )
+
+          dart_code = f"""
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
 
-          void main() {
+          void main() {{
             WidgetsFlutterBinding.ensureInitialized();
-            runApp(const WebToApkApp());
-          }
+            runApp(const Web2App());
+          }}
 
-          class WebToApkApp extends StatelessWidget {
-            const WebToApkApp({super.key});
-
-            @override
-            Widget build(BuildContext context) {
-              return MaterialApp(
-                debugShowCheckedModeBanner: false,
-                title: '${{ inputs.app_name }}',
-                theme: ThemeData(
-                  useMaterial3: true,
-                ),
-                home: const WebViewPage(),
-              );
-            }
-          }
-
-          class WebViewPage extends StatefulWidget {
-            const WebViewPage({super.key});
+          class Web2App extends StatefulWidget {{
+            const Web2App({{super.key}});
 
             @override
-            State<WebViewPage> createState() => _WebViewPageState();
-          }
+            State<Web2App> createState() => _Web2AppState();
+          }}
 
-          class _WebViewPageState extends State<WebViewPage> {
+          class _Web2AppState extends State<Web2App> {{
             late final WebViewController controller;
 
             @override
-            void initState() {
+            void initState() {{
               super.initState();
 
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onWebResourceError: (error) {{
+                      debugPrint(
+                        'WebView error: ${{error.description}}',
+                      );
+                    }},
+                  ),
+                )
                 ..loadRequest(
-                  Uri.parse('${{ inputs.web_url }}'),
+                  Uri.parse('{escaped_url}'),
                 );
-            }
+            }}
 
             @override
-            Widget build(BuildContext context) {
-              return Scaffold(
-                body: SafeArea(
-                  child: WebViewWidget(
-                    controller: controller,
+            Widget build(BuildContext context) {{
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  useMaterial3: true,
+                ),
+                home: Scaffold(
+                  body: SafeArea(
+                    child: WebViewWidget(
+                      controller: controller,
+                    ),
                   ),
                 ),
               );
-            }
-          }
-          DART
+            }}
+          }}
+          """
 
-      - name: Enable Internet Permission
+          with open("web2apk/lib/main.dart", "w", encoding="utf-8") as f:
+              f.write(dart_code)
+
+      # ==============================
+      # INTERNET PERMISSION
+      # ==============================
+      - name: Configure Android permissions
         run: |
           MANIFEST="web2apk/android/app/src/main/AndroidManifest.xml"
 
-          sed -i \
-            's#<manifest #<manifest android:usesCleartextTraffic="true" #' \
-            "$MANIFEST"
+          python3 - <<'PY'
+          path = "web2apk/android/app/src/main/AndroidManifest.xml"
 
-          sed -i \
-            's#<manifest #<manifest xmlns:android="http://schemas.android.com/apk/res/android" #' \
-            "$MANIFEST"
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
 
-          sed -i \
-            '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' \
-            "$MANIFEST"
+          permission = '<uses-permission android:name="android.permission.INTERNET"/>'
 
+          if permission not in content:
+              content = content.replace(
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    ' + permission
+              )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(content)
+          PY
+
+      # ==============================
+      # APP NAME + ICON
+      # ==============================
+      - name: Configure application
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          app_name = os.environ["APP_NAME"]
+
+          manifest = "web2apk/android/app/src/main/AndroidManifest.xml"
+
+          with open(manifest, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          # Set app label
+          content = re.sub(
+              r'android:label="[^"]*"',
+              'android:label="' + app_name.replace('"', '\\"') + '"',
+              content,
+              count=1
+          )
+
+          # Use downloaded icon if available
+          icon_path = "web2apk/android/app/src/main/res/drawable/app_icon.png"
+
+          if os.path.exists(icon_path):
+              content = re.sub(
+                  r'android:icon="[^"]*"',
+                  'android:icon="@drawable/app_icon"',
+                  content,
+                  count=1
+              )
+
+          with open(manifest, "w", encoding="utf-8") as f:
+              f.write(content)
+          PY
+
+      # ==============================
+      # GRADLE / FLUTTER CONFIG
+      # ==============================
+      - name: Flutter Pub Get
+        working-directory: web2apk
+        run: |
+          flutter clean
+          flutter pub get
+
+      # ==============================
+      # BUILD APK
+      # ==============================
       - name: Build APK
         working-directory: web2apk
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release
 
+      # ==============================
+      # COLLECT APK
+      # ==============================
       - name: Collect APK
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
           mkdir -p output
-          cp web2apk/build/app/outputs/flutter-apk/app-release.apk \
-             output/${{ inputs.app_name }}.apk
 
+          cp \
+            web2apk/build/app/outputs/flutter-apk/app-release.apk \
+            "output/${APP_NAME}.apk"
+
+          echo "Generated APK:"
           ls -lah output
 
+      # ==============================
+      # UPLOAD ARTIFACT
+      # ==============================
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: web2apk-${{ github.run_id }}
           path: output/*.apk
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
