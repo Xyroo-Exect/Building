@@ -58,10 +58,8 @@ jobs:
           echo "======================================"
 
           java -version
-
           echo ""
-          echo "JAVA_HOME:"
-          echo "$JAVA_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
 
       # ==========================================
       # FLUTTER
@@ -82,13 +80,9 @@ jobs:
           echo "======================================"
 
           flutter --version
-
           echo ""
-          echo "DART:"
           dart --version
-
           echo ""
-          echo "JAVA:"
           java -version
 
       # ==========================================
@@ -99,10 +93,6 @@ jobs:
         run: |
           set -e
 
-          echo "======================================"
-          echo "PREPARE DIRECTORIES"
-          echo "======================================"
-
           rm -rf project
           rm -rf output
           rm -f project.zip
@@ -110,10 +100,8 @@ jobs:
           mkdir -p project
           mkdir -p output
 
-          echo "Directories ready."
-
       # ==========================================
-      # DOWNLOAD ZIP
+      # DOWNLOAD
       # ==========================================
 
       - name: Download Flutter project
@@ -134,18 +122,8 @@ jobs:
 
           if [ -z "$GH_TOKEN" ]; then
             echo "ERROR: BUILD_TOKEN belum dikonfigurasi."
-            echo ""
-            echo "Buat:"
-            echo "Settings"
-            echo "-> Secrets and variables"
-            echo "-> Actions"
-            echo "-> New repository secret"
-            echo ""
-            echo "Name: BUILD_TOKEN"
             exit 1
           fi
-
-          echo "Downloading project..."
 
           curl -fL \
             --retry 5 \
@@ -163,21 +141,14 @@ jobs:
           ls -lh project.zip
 
           echo ""
-          echo "File type:"
-          file project.zip
-
-          echo ""
           echo "Checking ZIP..."
 
           if ! unzip -t project.zip >/dev/null 2>&1; then
-            echo "ERROR: File yang didownload bukan ZIP valid."
-            echo ""
-            echo "Response:"
-            head -c 500 project.zip || true
+            echo "ERROR: Download bukan ZIP valid."
             exit 1
           fi
 
-          echo "ZIP VALID."
+          echo "ZIP valid."
 
       # ==========================================
       # EXTRACT
@@ -194,49 +165,71 @@ jobs:
           unzip -q project.zip -d project
 
           echo ""
-          echo "Extracted files:"
+          echo "Project files:"
           find project -maxdepth 4 -type f | head -200
 
       # ==========================================
-      # FIX GRADLE PERMISSION
+      # FIX ALL SCRIPT PERMISSIONS
       # ==========================================
 
-      - name: Fix Gradle Permissions
+      - name: Fix Project Permissions
         run: |
           set -e
 
           echo "======================================"
-          echo "FIX GRADLE PERMISSIONS"
+          echo "FIX PROJECT PERMISSIONS"
           echo "======================================"
 
-          GRADLEW_FILES=$(find project \
+          echo "Searching Gradle wrappers..."
+
+          find project \
             -type f \
-            -path "*/android/gradlew")
-
-          if [ -z "$GRADLEW_FILES" ]; then
-            echo "WARNING: android/gradlew tidak ditemukan."
-            echo "Flutter project mungkin menggunakan struktur berbeda."
-          else
-            echo "gradlew ditemukan:"
-
-            echo "$GRADLEW_FILES"
-
-            while IFS= read -r GRADLEW; do
-              if [ -n "$GRADLEW" ]; then
-                echo ""
-                echo "Fixing:"
-                echo "$GRADLEW"
-
-                chmod +x "$GRADLEW"
-
-                echo "Permission:"
-                ls -lh "$GRADLEW"
-              fi
-            done <<< "$GRADLEW_FILES"
-          fi
+            -path "*/android/gradlew" \
+            -print
 
           echo ""
-          echo "Gradle permission fix selesai."
+          echo "Setting executable permission..."
+
+          find project \
+            -type f \
+            -path "*/android/gradlew" \
+            -exec chmod 755 {} \;
+
+          echo ""
+          echo "Checking permissions..."
+
+          find project \
+            -type f \
+            -path "*/android/gradlew" \
+            -exec ls -l {} \;
+
+          echo ""
+          echo "Checking Gradle wrapper files..."
+
+          while IFS= read -r GRADLEW; do
+            if [ -n "$GRADLEW" ]; then
+
+              echo ""
+              echo "File: $GRADLEW"
+
+              if [ ! -r "$GRADLEW" ]; then
+                echo "ERROR: gradlew tidak bisa dibaca."
+                exit 1
+              fi
+
+              if [ ! -x "$GRADLEW" ]; then
+                echo "ERROR: gradlew tidak executable."
+                exit 1
+              fi
+
+              echo "OK"
+
+            fi
+          done < <(
+            find project \
+              -type f \
+              -path "*/android/gradlew"
+          )
 
       # ==========================================
       # FIND FLUTTER PROJECT
@@ -268,48 +261,47 @@ jobs:
           PROJECT_DIR=$(dirname "$PUBSPEC")
 
           echo ""
-          echo "Flutter project ditemukan:"
+          echo "Flutter project:"
           echo "$PROJECT_DIR"
-
-          echo ""
-          echo "Project files:"
-          ls -lah "$PROJECT_DIR"
-
-          echo ""
-          echo "Saving PROJECT_DIR..."
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # CHECK GRADLE WRAPPER
+      # FIX GRADLE PERMISSION INSIDE PROJECT
       # ==========================================
 
-      - name: Check Gradle Wrapper
+      - name: Prepare Gradle
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
 
           echo "======================================"
-          echo "CHECK GRADLE WRAPPER"
+          echo "PREPARE GRADLE"
           echo "======================================"
 
           if [ -f "android/gradlew" ]; then
 
-            echo "gradlew ditemukan."
+            echo "Before:"
+            ls -l android/gradlew
 
-            chmod +x android/gradlew
-
-            echo ""
-            echo "Permission:"
-            ls -lh android/gradlew
+            chmod 755 android/gradlew
 
             echo ""
-            echo "Testing wrapper:"
-            ./android/gradlew --version
+            echo "After:"
+            ls -l android/gradlew
+
+            if [ ! -x android/gradlew ]; then
+              echo "ERROR: android/gradlew masih tidak executable."
+              exit 1
+            fi
+
+            echo ""
+            echo "Gradle wrapper permission OK."
 
           else
 
-            echo "WARNING: android/gradlew tidak ditemukan."
+            echo "ERROR: android/gradlew tidak ditemukan."
+            exit 1
 
           fi
 
@@ -344,7 +336,7 @@ jobs:
           flutter pub get
 
       # ==========================================
-      # BUILD RELEASE
+      # RELEASE
       # ==========================================
 
       - name: Build Release APK
@@ -357,10 +349,12 @@ jobs:
           echo "BUILD RELEASE APK"
           echo "======================================"
 
+          chmod 755 android/gradlew
+
           flutter build apk --release
 
       # ==========================================
-      # BUILD DEBUG
+      # DEBUG
       # ==========================================
 
       - name: Build Debug APK
@@ -372,6 +366,8 @@ jobs:
           echo "======================================"
           echo "BUILD DEBUG APK"
           echo "======================================"
+
+          chmod 755 android/gradlew
 
           flutter build apk --debug
 
@@ -419,11 +415,11 @@ jobs:
             -exec cp {} "$GITHUB_WORKSPACE/output/" \;
 
           echo ""
-          echo "APK output:"
+          echo "Output:"
           ls -lah "$GITHUB_WORKSPACE/output"
 
       # ==========================================
-      # RENAME APK
+      # RENAME
       # ==========================================
 
       - name: Rename APK
@@ -460,7 +456,7 @@ jobs:
           ls -lah output
 
       # ==========================================
-      # VERIFY APK
+      # VERIFY
       # ==========================================
 
       - name: Verify APK
@@ -477,7 +473,12 @@ jobs:
             -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Final APK tidak ditemukan."
+            echo "ERROR: APK tidak ditemukan."
+            exit 1
+          fi
+
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK kosong."
             exit 1
           fi
 
@@ -492,16 +493,11 @@ jobs:
           echo "File:"
           file "$APK"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK kosong."
-            exit 1
-          fi
-
           echo ""
           echo "APK verification berhasil."
 
       # ==========================================
-      # UPLOAD ARTIFACT
+      # UPLOAD
       # ==========================================
 
       - name: Upload APK Artifact
@@ -513,7 +509,7 @@ jobs:
           retention-days: 3
 
       # ==========================================
-      # BUILD SUMMARY
+      # SUMMARY
       # ==========================================
 
       - name: Build Summary
